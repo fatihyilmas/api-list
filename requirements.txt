@@ -1,3 +1,2 @@
 psycopg2-binary
 pycryptodome
-vercel_python_helper
