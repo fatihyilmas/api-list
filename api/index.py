@@ -49,7 +49,7 @@ def sync_data_to_db(payload: dict):
             if 'real_balance' in user_data:
                 cur.execute("UPDATE users SET bakiye = %s, last_activity = NOW() WHERE id = %s", (user_data['real_balance'], user_id))
         else:
-            cur.execute("INSERT INTO users (email, bakiye) VALUES (%s, %s) RETURNING id", (email, user_data.get('real_balance')))
+            cur.execute("INSERT INTO users (email, bakiye, date) VALUES (%s, %s, NOW()) RETURNING id", (email, user_data.get('real_balance')))
             user_id = cur.fetchone()[0]
 
         if user_data.get('settings'):
