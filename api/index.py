@@ -7,7 +7,6 @@ from Crypto.Util.Padding import unpad
 import psycopg2
 from psycopg2 import Error as PgError
 from psycopg2.extras import RealDictCursor
-from vercel_python_helper import VercelRequest, VercelResponse
 
 # --- Güvenlik ve Yapılandırma ---
 # Ortam değişkenlerinden API gizli anahtarını al
@@ -116,29 +115,57 @@ def sync_data_to_db(payload: dict):
             cur.close()
             conn.close()
 
-def handler(request: VercelRequest) -> VercelResponse:
+def handler(request):
     """Vercel sunucusuz fonksiyonunun ana giriş noktası."""
+    # Vercel'de request.method ve request.body doğrudan erişilebilir
+    # request.body bir byte dizisi olarak gelir, json.loads ile çözülmeli
+    
     if request.method != 'POST':
-        return VercelResponse(json.dumps({'success': False, 'message': 'Invalid request method.'}), status=405, headers={'Content-Type': 'application/json'})
+        return {
+            'statusCode': 405,
+            'headers': {'Content-Type': 'application/json'},
+            'body': json.dumps({'success': False, 'message': 'Invalid request method.'})
+        }
 
     try:
         body = json.loads(request.body)
         encrypted_data = body.get('encrypted_data')
 
         if not encrypted_data:
-            return VercelResponse(json.dumps({'success': False, 'message': 'Invalid or missing encrypted data.'}), status=400, headers={'Content-Type': 'application/json'})
+            return {
+                'statusCode': 400,
+                'headers': {'Content-Type': 'application/json'},
+                'body': json.dumps({'success': False, 'message': 'Invalid or missing encrypted data.'})
+            }
 
         decrypted_json = decrypt_from_python(encrypted_data)
         if decrypted_json is None:
-            return VercelResponse(json.dumps({'success': False, 'message': 'Decryption failed.'}), status=401, headers={'Content-Type': 'application/json'})
+            return {
+                'statusCode': 401,
+                'headers': {'Content-Type': 'application/json'},
+                'body': json.dumps({'success': False, 'message': 'Decryption failed.'})
+            }
 
         payload = json.loads(decrypted_json)
         
         result = sync_data_to_db(payload)
         status_code = 200 if result.get('success') else 400
-        return VercelResponse(json.dumps(result), status=status_code, headers={'Content-Type': 'application/json'})
+        
+        return {
+            'statusCode': status_code,
+            'headers': {'Content-Type': 'application/json'},
+            'body': json.dumps(result)
+        }
 
     except json.JSONDecodeError:
-        return VercelResponse(json.dumps({'success': False, 'message': 'Invalid JSON payload.'}), status=400, headers={'Content-Type': 'application/json'})
+        return {
+            'statusCode': 400,
+            'headers': {'Content-Type': 'application/json'},
+            'body': json.dumps({'success': False, 'message': 'Invalid JSON payload.'})
+        }
     except Exception as e:
-        return VercelResponse(json.dumps({'success': False, 'message': f'Server error: {e}'}), status=500, headers={'Content-Type': 'application/json'})
+        return {
+            'statusCode': 500,
+            'headers': {'Content-Type': 'application/json'},
+            'body': json.dumps({'success': False, 'message': f'Server error: {e}'})
+        }
