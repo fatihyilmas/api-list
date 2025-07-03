@@ -75,7 +75,14 @@ def sync_data_to_db(payload: dict, ip_address: str):
         if user_data.get('logs'):
             for log_type, logs in user_data['logs'].items():
                 for log in logs:
-                    cur.execute("INSERT INTO game_logs (user_id, game_mode, balance, bet_amount, total_bet_amount, status, bet_details, result_details) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)", (user_id, log_type, log.get('bakiye'), log.get('miktar'), log.get('toplam_miktar'), log.get('durum', 'Beklemede'), log.get('oyun'), log.get('sayi') or log.get('renk') or log.get('rakam')))
+                    # 0 değerinin NULL olarak yorumlanmasını engelle
+                    result_details = log.get('sayi')
+                    if result_details is None:
+                        result_details = log.get('renk')
+                    if result_details is None:
+                        result_details = log.get('rakam')
+                    
+                    cur.execute("INSERT INTO game_logs (user_id, game_mode, balance, bet_amount, total_bet_amount, status, bet_details, result_details) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)", (user_id, log_type, log.get('bakiye'), log.get('miktar'), log.get('toplam_miktar'), log.get('durum', 'Beklemede'), log.get('oyun'), result_details))
         
         conn.commit()
         return {'success': True, 'message': 'Sync successful.'}
