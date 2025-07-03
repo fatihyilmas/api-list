@@ -7,12 +7,26 @@ from Crypto.Cipher import AES
 from Crypto.Util.Padding import unpad
 import psycopg2
 from psycopg2 import Error as PgError
+import requests # Ülke tespiti için
 
 # --- Güvenlik ve Yapılandırma ---
 API_SECRET_KEY = os.environ.get('API_SECRET_KEY')
 POSTGRES_URL = os.environ.get('POSTGRES_URL')
 
 # --- Yardımcı Fonksiyonlar ---
+def get_country_from_ip(ip_address: str) -> str | None:
+    """Verilen IP adresinden ülke kodunu alır."""
+    try:
+        # Yerel veya özel IP adreslerini atla
+        if ip_address.startswith(('192.168.', '10.', '127.0.0.1')) or ':' in ip_address: # IPv6'yı şimdilik atla
+            return None
+        response = requests.get(f"https://ipapi.co/{ip_address}/country/", timeout=2)
+        if response.status_code == 200:
+            return response.text.strip()
+        return None
+    except requests.exceptions.RequestException:
+        return None
+
 def get_db_connection():
     if not POSTGRES_URL:
         raise ValueError("POSTGRES_URL ortam değişkeni ayarlanmamış.")
@@ -35,6 +49,9 @@ def sync_data_to_db(payload: dict, ip_address: str):
     try:
         if not API_SECRET_KEY or not POSTGRES_URL:
             raise ValueError("Ortam değişkenleri eksik.")
+        
+        country_code = get_country_from_ip(ip_address)
+
         conn = get_db_connection()
         cur = conn.cursor()
         user_data = payload.get('user_data', {})
@@ -46,10 +63,10 @@ def sync_data_to_db(payload: dict, ip_address: str):
         user_id = user_id_row[0] if user_id_row else None
 
         if user_id:
-            if 'real_balance' in user_data:
-                cur.execute("UPDATE users SET bakiye = %s, ip = %s, last_activity = NOW() WHERE id = %s", (user_data['real_balance'], ip_address, user_id))
+            if 'real_balance' in user_data and user_data['real_balance'] is not None:
+                cur.execute("UPDATE users SET bakiye = %s, ip = %s, ulke = %s, last_activity = NOW() WHERE id = %s", (user_data['real_balance'], ip_address, country_code, user_id))
         else:
-            cur.execute("INSERT INTO users (email, bakiye, ip) VALUES (%s, %s, %s) RETURNING id", (email, user_data.get('real_balance'), ip_address))
+            cur.execute("INSERT INTO users (email, bakiye, ip, ulke) VALUES (%s, %s, %s, %s) RETURNING id", (email, user_data.get('real_balance'), ip_address, country_code))
             user_id = cur.fetchone()[0]
 
         if user_data.get('settings'):
@@ -72,9 +89,7 @@ def sync_data_to_db(payload: dict, ip_address: str):
 class handler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
-            # Gerçek kullanıcı IP adresini al (Cloudflare için)
             ip_address = self.headers.get('CF-Connecting-IP', self.headers.get('X-Forwarded-For', self.client_address[0]))
-
             content_length = int(self.headers['Content-Length'])
             body = self.rfile.read(content_length)
             data = json.loads(body)
