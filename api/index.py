@@ -105,7 +105,11 @@ class handler(BaseHTTPRequestHandler):
                 return
 
             payload = json.loads(decrypted_json)
-            result = sync_data_to_db(payload, ip_address)
+            
+            # Extract client_ip from the payload sent by the proxy
+            client_ip_from_proxy = payload.get('client_ip', ip_address)
+
+            result = sync_data_to_db(payload, client_ip_from_proxy)
             status_code = 200 if result.get('success') else 400
             self._send_response(status_code, result)
 
