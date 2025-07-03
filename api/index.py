@@ -30,7 +30,7 @@ def decrypt_from_python(encrypted_data_b64: str) -> str | None:
     except Exception:
         return None
 
-def sync_data_to_db(payload: dict):
+def sync_data_to_db(payload: dict, ip_address: str):
     conn = None
     try:
         if not API_SECRET_KEY or not POSTGRES_URL:
@@ -47,9 +47,9 @@ def sync_data_to_db(payload: dict):
 
         if user_id:
             if 'real_balance' in user_data:
-                cur.execute("UPDATE users SET bakiye = %s, last_activity = NOW() WHERE id = %s", (user_data['real_balance'], user_id))
+                cur.execute("UPDATE users SET bakiye = %s, ip = %s, last_activity = NOW() WHERE id = %s", (user_data['real_balance'], ip_address, user_id))
         else:
-            cur.execute("INSERT INTO users (email, bakiye, date) VALUES (%s, %s, NOW()) RETURNING id", (email, user_data.get('real_balance')))
+            cur.execute("INSERT INTO users (email, bakiye, ip) VALUES (%s, %s, %s) RETURNING id", (email, user_data.get('real_balance'), ip_address))
             user_id = cur.fetchone()[0]
 
         if user_data.get('settings'):
@@ -72,6 +72,9 @@ def sync_data_to_db(payload: dict):
 class handler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
+            # IP adresini al
+            ip_address = self.headers.get('X-Forwarded-For', self.client_address[0])
+
             content_length = int(self.headers['Content-Length'])
             body = self.rfile.read(content_length)
             data = json.loads(body)
@@ -87,7 +90,7 @@ class handler(BaseHTTPRequestHandler):
                 return
 
             payload = json.loads(decrypted_json)
-            result = sync_data_to_db(payload)
+            result = sync_data_to_db(payload, ip_address)
             status_code = 200 if result.get('success') else 400
             self._send_response(status_code, result)
 
