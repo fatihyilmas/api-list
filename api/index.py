@@ -72,8 +72,8 @@ def sync_data_to_db(payload: dict, ip_address: str):
 class handler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
-            # IP adresini al
-            ip_address = self.headers.get('X-Forwarded-For', self.client_address[0])
+            # Gerçek kullanıcı IP adresini al (Cloudflare için)
+            ip_address = self.headers.get('CF-Connecting-IP', self.headers.get('X-Forwarded-For', self.client_address[0]))
 
             content_length = int(self.headers['Content-Length'])
             body = self.rfile.read(content_length)
