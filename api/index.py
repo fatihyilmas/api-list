@@ -3,49 +3,60 @@ import json
 import base64
 import hashlib
 from http.server import BaseHTTPRequestHandler
-from cryptography.hazmat.primitives import padding
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives import padding
 import sys
 
 def derive_key_python(secret: str) -> bytes:
-    return hashlib.sha256(secret.encode('utf-8')).digest()
+    salt = b'jbot_salt_v1'
+    iterations = 100_000
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=iterations,
+        backend=default_backend()
+    )
+    return kdf.derive(secret.encode('utf-8'))
 
-def decrypt_python_logic(encrypted_data_b64: str, secret_key: str) -> str | None:
+def decrypt_python_logic(encrypted_data_b64: bytes, secret_key: str) -> str | None:
     try:
         key = derive_key_python(secret_key)
         data = base64.b64decode(encrypted_data_b64)
-        if len(data) < 16: return None
-        iv, ciphertext = data[:16], data[16:]
+        iv = data[:12]
+        tag = data[12:28]
+        ciphertext = data[28:]
         
-        cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
+        cipher = Cipher(algorithms.AES(key), modes.GCM(iv, tag), backend=default_backend())
         decryptor = cipher.decryptor()
-        padded_data = decryptor.update(ciphertext) + decryptor.finalize()
-        
-        unpadder = padding.PKCS7(algorithms.AES.block_size).unpadder()
-        unpadded_data = unpadder.update(padded_data) + unpadder.finalize()
-        
-        return unpadded_data.decode('utf-8')
+        return (decryptor.update(ciphertext) + decryptor.finalize()).decode('utf-8')
     except Exception as e:
         print(f"Python iş mantığı deşifreleme hatası: {e}", file=sys.stderr)
         return None
 
-ENCRYPTED_PYTHON_LOGIC = os.environ.get('ENCRYPTED_PYTHON_LOGIC')
-DECRYPTION_KEY_PYTHON = os.environ.get('DECRYPTION_KEY_PYTHON')
-
-decrypted_python_logic_code = None
-
-if ENCRYPTED_PYTHON_LOGIC and DECRYPTION_KEY_PYTHON:
-    decrypted_python_logic_code = decrypt_python_logic(ENCRYPTED_PYTHON_LOGIC, DECRYPTION_KEY_PYTHON)
-    if not decrypted_python_logic_code:
-        print("ERROR: Decrypted Python logic is empty. Check ENCRYPTED_PYTHON_LOGIC and DECRYPTION_KEY_PYTHON.", file=sys.stderr)
-else:
-    print("ERROR: ENCRYPTED_PYTHON_LOGIC or DECRYPTION_KEY_PYTHON environment variables are missing.", file=sys.stderr)
-
 class handler(BaseHTTPRequestHandler):
     def do_POST(self):
-        if not decrypted_python_logic_code:
-            self._send_response(500, {'success': False, 'message': 'Server configuration error: Business logic could not be loaded.'})
+        decryption_key = os.environ.get('DECRYPTION_KEY_PYTHON')
+        if not decryption_key:
+            self._send_response(500, {'success': False, 'message': 'Server configuration error: Missing decryption key.'})
+            return
+
+        try:
+            current_dir = os.path.dirname(__file__)
+            encrypted_file_path = os.path.join(current_dir, 'business_logic.enc')
+            with open(encrypted_file_path, 'rb') as f:
+                encrypted_logic_b64 = f.read()
+        except FileNotFoundError:
+            self._send_response(500, {'success': False, 'message': 'Server configuration error: Encrypted logic file not found.'})
+            return
+
+        decrypted_code = decrypt_python_logic(encrypted_logic_b64, decryption_key)
+
+        if not decrypted_code:
+            self._send_response(500, {'success': False, 'message': 'Server configuration error: Business logic could not be loaded. Check decryption key.'})
             return
         
         env = {
@@ -56,7 +67,7 @@ class handler(BaseHTTPRequestHandler):
         local_scope = {'request_handler_instance': self, 'env': env}
         
         try:
-            exec(decrypted_python_logic_code, globals(), local_scope)
+            exec(decrypted_code, globals(), local_scope)
             local_scope['execute_python_business_logic'](self, env)
         except Exception as e:
             print(f"BUSINESS_LOGIC_EXECUTION_ERROR: {e}", file=sys.stderr)
