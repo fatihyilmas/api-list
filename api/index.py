@@ -3,8 +3,10 @@ import json
 import base64
 import hashlib
 from http.server import BaseHTTPRequestHandler
-from Crypto.Cipher import AES
-from Crypto.Util.Padding import unpad
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 import psycopg2
 from psycopg2 import Error as PgError
 import requests # Ülke tespiti için
@@ -32,16 +34,41 @@ def get_db_connection():
         raise ValueError("POSTGRES_URL ortam değişkeni ayarlanmamış.")
     return psycopg2.connect(POSTGRES_URL)
 
-def decrypt_from_python(encrypted_data_b64: str) -> str | None:
+def _derive_key_from_secret(secret: str) -> bytes:
+    """Derives a 256-bit encryption key from a shared secret using PBKDF2."""
+    if not secret:
+        raise ValueError("Shared secret is not provided.")
+    salt = b'jbot_salt_v1'
+    iterations = 100_000
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=iterations,
+        backend=default_backend()
+    )
+    return kdf.derive(secret.encode('utf-8'))
+
+def decrypt_from_python(encrypted_text_b64: str) -> str | None:
+    """Decrypts a base64 encoded string encrypted with AES-GCM."""
+    if not encrypted_text_b64 or not API_SECRET_KEY:
+        return None
     try:
-        key = hashlib.sha256(API_SECRET_KEY.encode('utf-8')).digest()
-        data = base64.b64decode(encrypted_data_b64)
-        if len(data) < 16: return None
-        iv, ciphertext = data[:16], data[16:]
-        cipher = AES.new(key, AES.MODE_CBC, iv)
-        decrypted_data = unpad(cipher.decrypt(ciphertext), AES.block_size)
-        return decrypted_data.decode('utf-8')
-    except Exception:
+        key = _derive_key_from_secret(API_SECRET_KEY)
+        data = base64.b64decode(encrypted_text_b64.encode('utf-8'))
+        iv = data[:12]
+        tag = data[12:28]
+        ciphertext = data[28:]
+        
+        decryptor = Cipher(
+            algorithms.AES(key),
+            modes.GCM(iv, tag),
+            backend=default_backend()
+        ).decryptor()
+        
+        return (decryptor.update(ciphertext) + decryptor.finalize()).decode('utf-8')
+    except (ValueError, TypeError):
+        # Handles base64 decoding errors or other issues
         return None
 
 def sync_data_to_db(payload: dict, ip_address: str):
@@ -92,7 +119,6 @@ def sync_data_to_db(payload: dict, ip_address: str):
     finally:
         if conn: cur.close(); conn.close()
 
-# --- Vercel Handler Sınıfı ---
 class handler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
